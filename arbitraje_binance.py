@@ -27,34 +27,58 @@ def obtener_tasa_bcv():
     except:
         return 756.71 # Tasa de respaldo en caso de fallo de conexión
 
-@st.cache_data(ttl=60) # Se refresca cada minuto para el P2P
+@st.cache_data(ttl=60) 
 def obtener_tasa_binance(monto_ves_estimado=None):
     try:
         url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
         headers = {"Content-Type": "application/json"}
         
-        # Parámetros: Tú vendes (TradeType BUY para el comerciante)
+        # Filtramos específicamente por los métodos de pago que tienes disponibles
         data = {
             "fiat": "VES",
             "page": 1,
-            "rows": 10,
+            "rows": 20,
             "tradeType": "BUY", 
             "asset": "USDT",
-            "payTypes": [],
+            "payTypes": ["PagoMovil", "BNC"], # <--- FILTRO DE BANCOS APLICADO AQUÍ
             "publisherType": None,
             "filterType": "all" 
         }
         
-        # Filtramos por tu monto para asegurar que los límites de orden coincidan
         if monto_ves_estimado:
-            # Convertimos a entero (string) para evitar problemas con la API
             data["transAmount"] = str(int(monto_ves_estimado))
 
         respuesta = requests.post(url, headers=headers, json=data, timeout=5)
         anuncios = respuesta.json().get('data', [])
         
         if not anuncios:
-             return 850.00 # Respaldo
+             return 850.00
+
+        # 1. FILTRO DE CONFIANZA (Solo comerciantes con +90% completadas y +50 órdenes)
+        precios_confiables = []
+        for anuncio in anuncios:
+            vendedor = anuncio.get('advertiser', {})
+            ratio_completadas = float(vendedor.get('monthFinishRate', 0))
+            ordenes_mes = int(vendedor.get('monthOrderCount', 0))
+            
+            if ratio_completadas >= 0.90 and ordenes_mes >= 50:
+                precios_confiables.append(float(anuncio['adv']['price']))
+        
+        if not precios_confiables:
+            precios_confiables = [float(a['adv']['price']) for a in anuncios]
+
+        # 2. SELECCIÓN CONSERVADORA (Promedio de las posiciones reales)
+        if len(precios_confiables) >= 4:
+            muestra = precios_confiables[2:5] 
+            tasa_realista = sum(muestra) / len(muestra)
+            return tasa_realista
+        elif len(precios_confiables) >= 2:
+            return precios_confiables[1] 
+        else:
+            return precios_confiables[0] 
+            
+    except:
+        return 850.00
 
         # LÓGICA CONSERVADORA: Ignorar el primer anuncio (suele ser poco realista) 
         # y sacar un promedio de los siguientes 3 disponibles en la lista.
