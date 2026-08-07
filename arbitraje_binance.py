@@ -3,6 +3,7 @@ import requests
 from bs4 import BeautifulSoup
 import datetime
 import re
+import statistics
 
 st.set_page_config(page_title="Arbitraje BNC-Binance", page_icon="🔄", layout="centered")
 
@@ -25,7 +26,7 @@ def obtener_tasa_bcv():
         return 756.71
     return 756.71
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=30)  # Actualiza cada 30 segundos para ser más reactivo
 def obtener_tasa_binance(inversion_usd, tasa_bcv):
     try:
         url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
@@ -40,9 +41,9 @@ def obtener_tasa_binance(inversion_usd, tasa_bcv):
             "fiat": "VES",
             "merchantCheck": False,
             "page": 1,
-            "payTypes": ["PagoMovil", "BNC"],
+            "payTypes": ["PagoMovil"],  # Solo Pago Móvil
             "publisherType": None,
-            "rows": 50,
+            "rows": 100,  # Más anuncios para tener mejor muestra
             "tradeType": "BUY",
             "transAmount": str(monto_filtro)
         }
@@ -54,35 +55,60 @@ def obtener_tasa_binance(inversion_usd, tasa_bcv):
         if not anuncios:
             return 847.00  # respaldo
 
-        # 1. Separar promocionados
-        no_promocionados = []
+        # --- Filtrar anuncios válidos ---
+        validos = []
         for ad in anuncios:
             adv = ad.get('adv', {})
-            if not (adv.get('isPromoted') or ad.get('isPromoted')):
-                no_promocionados.append(ad)
+            # Excluir promocionados
+            if adv.get('isPromoted') or ad.get('isPromoted'):
+                continue
 
-        if not no_promocionados:
-            # Si todos son promocionados, tomar el primero (aunque sea promocionado)
-            return float(anuncios[0]['adv']['price'])
-
-        # 2. Buscar entre no promocionados los que acepten Pago Móvil o BNC
-        for ad in no_promocionados:
-            adv = ad.get('adv', {})
+            # Verificar que acepte Pago Móvil (por si la API no filtra bien)
             pay_types = adv.get('payTypes', [])
             texto_pagos = ' '.join(pay_types).lower()
-            if re.search(r'pago\s*movil|bnc|banco nacional de crédito', texto_pagos):
-                precio = float(adv.get('price', 0))
-                if precio > 0:
-                    return precio
+            if not re.search(r'pago\s*movil', texto_pagos):
+                continue
 
-        # 3. Si no hay con Pago Móvil/BNC, tomar el primer no promocionado
-        for ad in no_promocionados:
-            precio = float(ad['adv'].get('price', 0))
-            if precio > 0:
-                return precio
+            precio = float(adv.get('price', 0))
+            if precio <= 0:
+                continue
 
-        # 4. Último recurso
-        return 847.00
+            # Obtener el monto máximo de la orden (para ponderar)
+            max_amount = float(adv.get('maxSingleTransAmount', 0))
+            if max_amount == 0:
+                max_amount = 1  # Si no tiene límite, le damos un peso pequeño
+
+            validos.append({
+                'precio': precio,
+                'max_amount': max_amount
+            })
+
+        if not validos:
+            # Si no hay con Pago Móvil, tomar el primer no promocionado (cualquier método)
+            for ad in anuncios:
+                adv = ad.get('adv', {})
+                if not (adv.get('isPromoted') or ad.get('isPromoted')):
+                    precio = float(adv.get('price', 0))
+                    if precio > 0:
+                        return precio
+            return 847.00
+
+        # --- Ordenar por precio (ascendente) ---
+        validos.sort(key=lambda x: x['precio'])
+
+        # Tomar los 10 mejores precios (para evitar outliers muy bajos)
+        top = validos[:10]
+
+        # --- Promedio ponderado por el monto máximo ---
+        # Los anuncios con mayor capacidad de transacción tienen más peso
+        total_peso = sum(item['max_amount'] for item in top)
+        if total_peso == 0:
+            total_peso = len(top)
+
+        promedio_ponderado = sum(item['precio'] * item['max_amount'] for item in top) / total_peso
+
+        # Redondear a 2 decimales
+        return round(promedio_ponderado, 2)
 
     except Exception:
         return 847.00
@@ -90,7 +116,7 @@ def obtener_tasa_binance(inversion_usd, tasa_bcv):
 
 # --- Interfaz de usuario ---
 st.title("🔄 Arbitraje BNC ➔ Binance")
-st.markdown("Tasa P2P real con filtros de Pago Móvil / BNC")
+st.markdown("Tasa P2P real con Pago Móvil y promedio ponderado por liquidez")
 
 st.sidebar.header("⚙️ Configuración")
 modo_auto = st.sidebar.toggle("Tasas automáticas en vivo", value=True)
