@@ -3,11 +3,10 @@ import requests
 from bs4 import BeautifulSoup
 import datetime
 
-# --- Configuración de la página (Responsiva para Celular) ---
+# --- Configuración de la página ---
 st.set_page_config(page_title="Arbitraje BNC-Binance", page_icon="🔄", layout="centered")
 
-# --- Comisiones Fijas (Ocultas en UI, activas en cálculos) ---
-# Intervención (0.50%) + Tarjeta (1.50%) + Plataforma (4.10%) = 6.10%
+# --- Comisiones Fijas ---
 COM_BANCO = 0.005
 COM_TARJETA = 0.015
 COM_PLATAFORMA = 0.041
@@ -24,7 +23,7 @@ def obtener_tasa_bcv():
             texto_dolar = dolar_div.find('strong').text
             return float(texto_dolar.replace(',', '.'))
     except:
-        return 756.71 # Respaldo
+        return 756.71
 
 @st.cache_data(ttl=60) 
 def obtener_tasa_binance(inversion_usd, tasa_usdt_estimada):
@@ -32,83 +31,75 @@ def obtener_tasa_binance(inversion_usd, tasa_usdt_estimada):
         url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
         headers = {"Content-Type": "application/json"}
         
-        # Filtro de capital fidedigno: Dólares de inversión * Tasa USDT estimada
+        # Monto exacto en Bs. para filtrar la búsqueda (Ej: 17,000 VES)
         monto_ves_fidedigno = int(inversion_usd * tasa_usdt_estimada)
         
+        # Payload alineado punto por punto con tus capturas
         data = {
-            "fiat": "VES",
-            "page": 1,
-            "rows": 20,
-            "tradeType": "BUY",  # Tú vendes USDT, los compradores te pagan en Bs.
             "asset": "USDT",
-            "payTypes": ["PagoMovil", "BNC"], # Restringido a Pago Móvil y BNC
+            "fiat": "VES",
+            "merchantCheck": False,        # "Solo comerciantes Verificados" = OFF
+            "page": 1,
+            "payTypes": ["PagoMovil", "BNC"], # Pago Móvil y BNC
             "publisherType": None,
-            "filterType": "all",
-            "transAmount": str(monto_ves_fidedigno) # Límite fidedigno en Bolívares
+            "rows": 20,
+            "tradeType": "BUY",             # Pestana VENTA en la app
+            "transAmount": str(monto_ves_fidedigno)
         }
 
         respuesta = requests.post(url, headers=headers, json=data, timeout=5)
         anuncios = respuesta.json().get('data', [])
         
         if not anuncios:
-             return 850.00
+             return 846.90
 
-        # 1. FILTRO DE CONFIANZA (+90% de órdenes completadas y +50 órdenes al mes)
-        precios_confiables = []
-        for anuncio in anuncios:
-            vendedor = anuncio.get('advertiser', {})
-            ratio_completadas = float(vendedor.get('monthFinishRate', 0))
-            ordenes_mes = int(vendedor.get('monthOrderCount', 0))
+        # Filtrado de ofertas reales (excluyendo promocionadas)
+        precios_reales = []
+        for ad in anuncios:
+            adv = ad.get('adv', {})
             
-            if ratio_completadas >= 0.90 and ordenes_mes >= 50:
-                precios_confiables.append(float(anuncio['adv']['price']))
+            # Excluir anuncios promocionados
+            if adv.get('isPromoted') or ad.get('isPromoted'):
+                continue
+                
+            precio = float(adv.get('price', 0))
+            if precio > 0:
+                precios_reales.append(precio)
         
-        # Si el filtro es muy estricto, mantiene la lista original por seguridad
-        if not precios_confiables:
-            precios_confiables = [float(a['adv']['price']) for a in anuncios]
+        if not precios_reales:
+            return 846.90
 
-        # 2. TASA CONSERVADORA (Promedio de las posiciones 3ra, 4ta y 5ta reales)
-        if len(precios_confiables) >= 5:
-            muestra = precios_confiables[2:5] 
-            return sum(muestra) / len(muestra)
-        elif len(precios_confiables) >= 2:
-            return precios_confiables[1] 
-        else:
-            return precios_confiables[0] 
+        # Promedio del top 3 de anuncios reales en pantalla (Ej: 846.92, 846.70, 846.50)
+        top_anuncios = precios_reales[:3]
+        return sum(top_anuncios) / len(top_anuncios)
             
     except:
-        return 850.00 
+        return 846.90 
 
 # --- Interfaz de Usuario ---
 st.title("🔄 Arbitraje BNC ➔ Binance")
-st.markdown("Calculadora P2P optimizada con filtros de capital fidedignos.")
 
-# --- Panel Lateral ---
 st.sidebar.header("⚙️ Configuración")
 modo_automatico = st.sidebar.toggle("Tasas automáticas en vivo", value=True)
 
 st.sidebar.divider()
 
-# PRIORIDAD PRINCIPAL: Monto a Invertir
 st.sidebar.header("💰 Inversión")
 inversion = st.sidebar.number_input("Monto a Inyectar ($)", value=20.0, step=10.0, format="%.2f")
 
 st.sidebar.divider()
 
-# SECUNDARIO: Tasas de Cambio
 st.sidebar.header("📊 Tasas de Cambio")
 
 if modo_automatico:
     tasa_bcv_actual = obtener_tasa_bcv()
-    
-    # Proyección fidedigna de tasa USDT (BCV * 1.12 aproximadamente) para calcular el monto en Bs.
     tasa_usdt_proyectada = tasa_bcv_actual * 1.12
     tasa_binance_actual = obtener_tasa_binance(inversion, tasa_usdt_proyectada)
     
     st.sidebar.success(f"✅ Actualizado a las {datetime.datetime.now().strftime('%H:%M')}")
 else:
     tasa_bcv_actual = 756.71
-    tasa_binance_actual = 849.71 
+    tasa_binance_actual = 846.92 
     st.sidebar.warning("⚠️ Modo Manual Activo")
 
 tasa_bcv = st.sidebar.number_input("Tasa BCV (Bs/$)", value=tasa_bcv_actual, step=1.00, format="%.2f", disabled=modo_automatico)
@@ -121,10 +112,7 @@ costo_total_bs = inversion * bs_compra
 ingreso_total_bs = inversion * tasa_binance
 profit_total_bs = ingreso_total_bs - costo_total_bs
 
-# Ganancia en USDT basada estrictamente en la Tasa de Venta de Binance
 profit_total_usd_binance = profit_total_bs / tasa_binance if tasa_binance > 0 else 0
-
-# Rendimiento relativo al ingreso total de la venta
 margen_ganancia_porcentaje = (profit_total_bs / ingreso_total_bs * 100) if ingreso_total_bs > 0 else 0
 
 # --- Dashboard Principal ---
