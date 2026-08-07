@@ -23,24 +23,23 @@ def obtener_tasa_bcv():
             texto_dolar = dolar_div.find('strong').text
             return float(texto_dolar.replace(',', '.'))
     except:
-        return 756.71 # Respaldo
+        return 756.71
 
-@st.cache_data(ttl=60) # Refresco más rápido (1 minuto) para el P2P
+@st.cache_data(ttl=60) 
 def obtener_tasa_binance(monto_ves_estimado=None):
     try:
         url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
         headers = {"Content-Type": "application/json"}
         
-        # tradeType: BUY (Tú vendes, ellos compran)
         data = {
             "fiat": "VES",
             "page": 1,
-            "rows": 10, # Traemos 10 para buscar el mejor real
+            "rows": 10,
             "tradeType": "BUY", 
             "asset": "USDT",
             "payTypes": [],
             "publisherType": None,
-            "filterType": "all" # Intentamos evitar filtros que bloqueen anuncios comunes
+            "filterType": "all" 
         }
         
         if monto_ves_estimado:
@@ -52,12 +51,8 @@ def obtener_tasa_binance(monto_ves_estimado=None):
         if not anuncios:
              return 850.00
 
-        # Buscamos el primer anuncio razonable (evitamos precios exageradamente bajos que suelen ser estafas/promociones raras)
-        # Asumimos que la tasa real está cerca de la media de los primeros resultados.
         for anuncio in anuncios:
              precio = float(anuncio['adv']['price'])
-             # En tu captura de pantalla, el primer resultado orgánico sin verificación requerida estaba cerca de 849.71
-             # Retornamos el primero que encontremos, confiando en que el ordenamiento de Binance es correcto para usuarios normales.
              return precio
             
     except:
@@ -79,14 +74,12 @@ st.sidebar.header("📊 Tasas de Cambio")
 
 if modo_automatico:
     tasa_bcv_actual = obtener_tasa_bcv()
-    # Usamos una estimación generosa para asegurar que caemos en un buen rango de P2P
     monto_fiat_estimado = inversion * (tasa_bcv_actual * 1.1) 
     tasa_binance_actual = obtener_tasa_binance(monto_fiat_estimado)
-    
     st.sidebar.success(f"✅ Actualizado a las {datetime.datetime.now().strftime('%H:%M')}")
 else:
     tasa_bcv_actual = 756.71
-    tasa_binance_actual = 849.71 # Tasa de referencia basada en tu captura
+    tasa_binance_actual = 849.71 
     st.sidebar.warning("⚠️ Modo Manual Activo")
 
 tasa_bcv = st.sidebar.number_input("Tasa BCV (Bs/$)", value=tasa_bcv_actual, step=1.00, format="%.2f", disabled=modo_automatico)
@@ -100,7 +93,9 @@ costo_total_bs = inversion * bs_compra
 ingreso_total_bs = inversion * tasa_binance
 profit_total_bs = ingreso_total_bs - costo_total_bs
 
-# Calculamos el margen de ganancia respecto a la tasa de venta (Rendimiento)
+# CORRECCIÓN: Ganancia en Dólares basada en la tasa a la que VENDES en Binance (USDT reales)
+profit_total_usd_binance = profit_total_bs / tasa_binance if tasa_binance > 0 else 0
+
 if ingreso_total_bs > 0:
     margen_ganancia_porcentaje = (profit_total_bs / ingreso_total_bs) * 100
 else:
@@ -123,8 +118,9 @@ st.write("")
 if profit_total_bs > 0:
     st.success(f"""
     ### 🎉 Operación Rentable
-    **Ganancia Neta:** Bs. {profit_total_bs:,.2f}  
-    **Rendimiento (Profit):** {margen_ganancia_porcentaje:,.2f}% (sobre la venta)
+    **Ganancia Neta (Bolívares):** Bs. {profit_total_bs:,.2f}  
+    **Ganancia Neta (Binance):** {profit_total_usd_binance:,.2f} USDT  
+    **Rendimiento:** {margen_ganancia_porcentaje:,.2f}% 
     """)
 else:
     st.error(f"""
