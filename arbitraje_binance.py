@@ -26,55 +26,60 @@ def obtener_tasa_bcv():
         return 756.71
 
 @st.cache_data(ttl=60) 
-def obtener_tasa_binance(inversion_usd, tasa_usdt_estimada):
+def obtener_tasa_binance(inversion_usd, tasa_bcv):
     try:
         url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
-        headers = {"Content-Type": "application/json"}
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        }
         
-        # Monto exacto en Bs. para filtrar la búsqueda (Ej: 17,000 VES)
-        monto_ves_fidedigno = int(inversion_usd * tasa_usdt_estimada)
+        # Monto EXACTO en VES que vas a recibir/vender (Ej: 15$ * 756.71 * 1.061 = ~12,050 VES)
+        monto_ves_exacto = int(inversion_usd * tasa_bcv * (1 + TOTAL_COMISIONES))
         
-        # Payload alineado punto por punto con tus capturas
+        # Si el monto es muy bajo, ponemos un piso mínimo de búsqueda de 1,000 VES
+        monto_filtro = max(monto_ves_exacto, 1000)
+        
         data = {
             "asset": "USDT",
             "fiat": "VES",
-            "merchantCheck": False,        # "Solo comerciantes Verificados" = OFF
+            "merchantCheck": False,        # Solo verificados = OFF
             "page": 1,
             "payTypes": ["PagoMovil", "BNC"], # Pago Móvil y BNC
             "publisherType": None,
             "rows": 20,
-            "tradeType": "BUY",             # Pestana VENTA en la app
-            "transAmount": str(monto_ves_fidedigno)
+            "tradeType": "BUY",             # Pestaña VENTA
+            "transAmount": str(monto_filtro)
         }
 
         respuesta = requests.post(url, headers=headers, json=data, timeout=5)
         anuncios = respuesta.json().get('data', [])
         
         if not anuncios:
-             return 846.90
+             return 847.00
 
-        # Filtrado de ofertas reales (excluyendo promocionadas)
-        precios_reales = []
+        precios_validos = []
         for ad in anuncios:
             adv = ad.get('adv', {})
             
-            # Excluir anuncios promocionados
+            # Omitir anuncios promocionados (como Gasper25)
             if adv.get('isPromoted') or ad.get('isPromoted'):
                 continue
                 
             precio = float(adv.get('price', 0))
             if precio > 0:
-                precios_reales.append(precio)
+                precios_validos.append(precio)
         
-        if not precios_reales:
-            return 846.90
+        if not precios_validos:
+            return 847.00
 
-        # Promedio del top 3 de anuncios reales en pantalla (Ej: 846.92, 846.70, 846.50)
-        top_anuncios = precios_reales[:3]
-        return sum(top_anuncios) / len(top_anuncios)
+        # Tomamos la tasa del 1er o 2do comerciante REAL (Ej: Perfect_Process a 849.32 o cambios_kg a 846.50)
+        tasa_capturada = precios_validos[0] if len(precios_validos) == 1 else (precios_validos[0] + precios_validos[1]) / 2
+        
+        return tasa_capturada
             
     except:
-        return 846.90 
+        return 847.00 
 
 # --- Interfaz de Usuario ---
 st.title("🔄 Arbitraje BNC ➔ Binance")
@@ -85,7 +90,7 @@ modo_automatico = st.sidebar.toggle("Tasas automáticas en vivo", value=True)
 st.sidebar.divider()
 
 st.sidebar.header("💰 Inversión")
-inversion = st.sidebar.number_input("Monto a Inyectar ($)", value=20.0, step=10.0, format="%.2f")
+inversion = st.sidebar.number_input("Monto a Inyectar ($)", value=15.0, step=5.0, format="%.2f")
 
 st.sidebar.divider()
 
@@ -93,17 +98,16 @@ st.sidebar.header("📊 Tasas de Cambio")
 
 if modo_automatico:
     tasa_bcv_actual = obtener_tasa_bcv()
-    tasa_usdt_proyectada = tasa_bcv_actual * 1.12
-    tasa_binance_actual = obtener_tasa_binance(inversion, tasa_usdt_proyectada)
+    tasa_binance_actual = obtener_tasa_binance(inversion, tasa_bcv_actual)
     
     st.sidebar.success(f"✅ Actualizado a las {datetime.datetime.now().strftime('%H:%M')}")
 else:
     tasa_bcv_actual = 756.71
-    tasa_binance_actual = 846.92 
+    tasa_binance_actual = 847.00 
     st.sidebar.warning("⚠️ Modo Manual Activo")
 
 tasa_bcv = st.sidebar.number_input("Tasa BCV (Bs/$)", value=tasa_bcv_actual, step=1.00, format="%.2f", disabled=modo_automatico)
-tasa_binance = st.sidebar.number_input("Tasa Venta Binance (Bs/$)", value=tasa_binance_actual, step=1.00, format="%.2f", disabled=modo_automatico)
+tasa_binance = st.sidebar.number_input("Tasa Venta Binance (Bs/$)", value=tasa_binance_actual, step=0.10, format="%.2f", disabled=modo_automatico)
 
 # --- Cálculos Matemáticos ---
 bs_compra = tasa_bcv * (1 + TOTAL_COMISIONES)
