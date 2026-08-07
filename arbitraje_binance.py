@@ -6,11 +6,17 @@ import datetime
 # --- Configuración de la página (Responsiva) ---
 st.set_page_config(page_title="Arbitraje BNC-Binance", page_icon="🔄", layout="centered")
 
+# --- Comisiones Fijas (Ocultas en la UI, pero activas en la matemática) ---
+# Intervención (0.50%) + Tarjeta (1.50%) + Plataforma (4.10%) = 6.10%
+COM_BANCO = 0.005
+COM_TARJETA = 0.015
+COM_PLATAFORMA = 0.041
+TOTAL_COMISIONES = COM_BANCO + COM_TARJETA + COM_PLATAFORMA
+
 # --- Funciones para obtener tasas automáticamente ---
-@st.cache_data(ttl=300) # Guarda los datos por 5 minutos para cargar rápido
+@st.cache_data(ttl=300) # Se refresca cada 5 minutos
 def obtener_tasa_bcv():
     try:
-        # Extraemos la tasa directo del portal del BCV (ignorando errores de certificado)
         respuesta = requests.get("https://www.bcv.org.ve/", verify=False, timeout=5)
         soup = BeautifulSoup(respuesta.text, 'html.parser')
         dolar_div = soup.find('div', id='dolar')
@@ -18,64 +24,74 @@ def obtener_tasa_bcv():
             texto_dolar = dolar_div.find('strong').text
             return float(texto_dolar.replace(',', '.'))
     except:
-        return 756.90 # Tasa por defecto si falla el BCV
+        return 756.90 # Tasa de respaldo
 
-@st.cache_data(ttl=300)
-def obtener_tasa_binance():
+@st.cache_data(ttl=120) # Se refresca cada 2 minutos en Binance
+def obtener_tasa_binance(monto_ves_estimado=None):
     try:
         url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
         headers = {"Content-Type": "application/json"}
-        # Buscamos a cómo compran el USDT los comerciantes (TradeType: BUY)
+        
+        # Buscamos Anuncios de COMPRA (Nosotros vamos a VENDERLES a ellos).
+        # publisherType: None incluye a los compradores no verificados (mejor tasa).
         data = {
             "fiat": "VES",
             "page": 1,
             "rows": 1,
-            "tradeType": "BUY",
+            "tradeType": "BUY", 
             "asset": "USDT",
             "payTypes": [],
-            "publisherType": None
+            "publisherType": None 
         }
+        
+        # Filtramos por el monto que vamos a cambiar para evitar límites inválidos
+        if monto_ves_estimado:
+            data["transAmount"] = str(monto_ves_estimado)
+
         respuesta = requests.post(url, headers=headers, json=data, timeout=5)
         precio = respuesta.json()['data'][0]['adv']['price']
         return float(precio)
     except:
-        return 848.00 # Tasa por defecto si falla Binance
+        return 850.00 # Tasa de respaldo
 
 # --- Interfaz de Usuario ---
 st.title("🔄 Arbitraje BNC ➔ Binance")
-st.markdown("Calculadora inteligente con actualización de tasas en tiempo real.")
+st.markdown("Calculadora inteligente P2P.")
 
-# --- Panel Lateral (Configuración) ---
+# --- Panel Lateral (Orden de Prioridad Ajustado) ---
 st.sidebar.header("⚙️ Configuración")
-modo_automatico = st.sidebar.toggle("Usar tasas automáticas en vivo", value=True)
-
-if modo_automatico:
-    tasa_bcv_actual = obtener_tasa_bcv()
-    tasa_binance_actual = obtener_tasa_binance()
-    st.sidebar.success(f"Tasas actualizadas a las {datetime.datetime.now().strftime('%H:%M')}")
-else:
-    tasa_bcv_actual = 756.71
-    tasa_binance_actual = 851.00
-    st.sidebar.warning("Modo Manual Activo")
+modo_automatico = st.sidebar.toggle("Tasas automáticas en vivo", value=True)
 
 st.sidebar.divider()
 
-st.sidebar.header("📊 Tasas de Cambio")
-tasa_bcv = st.sidebar.number_input("Tasa BCV (Bs/$)", value=tasa_bcv_actual, step=1.00, format="%.2f", disabled=modo_automatico)
-tasa_binance = st.sidebar.number_input("Tasa Binance P2P (Bs/$)", value=tasa_binance_actual, step=1.00, format="%.2f", disabled=modo_automatico)
-
-st.sidebar.header("💸 Comisiones (%)")
-# Ajustadas a tus nuevos valores optimizados
-com_banco = st.sidebar.number_input("Intervención Bancaria (%)", value=0.50, step=0.10) / 100
-com_tarjeta = st.sidebar.number_input("Uso de Tarjeta (%)", value=1.50, step=0.10) / 100
-com_bpay = st.sidebar.number_input("Comisión Plataforma (%)", value=4.10, step=0.10) / 100
-
+# PRIORIDAD: Monto a Invertir
 st.sidebar.header("💰 Inversión")
-inversion = st.sidebar.number_input("Monto a Invertir ($)", value=92.0, step=10.0)
+inversion = st.sidebar.number_input("Monto a Inyectar ($)", value=92.0, step=10.0, format="%.2f")
+
+st.sidebar.divider()
+
+# SECUNDARIO: Tasas de Cambio
+st.sidebar.header("📊 Tasas de Cambio")
+
+if modo_automatico:
+    tasa_bcv_actual = obtener_tasa_bcv()
+    
+    # Calculamos cuántos bolívares representa la inversión para buscar una tasa realista
+    monto_fiat_estimado = inversion * tasa_bcv_actual
+    tasa_binance_actual = obtener_tasa_binance(monto_fiat_estimado)
+    
+    st.sidebar.success(f"✅ Tasas obtenidas a las {datetime.datetime.now().strftime('%H:%M')}")
+else:
+    tasa_bcv_actual = 756.71
+    tasa_binance_actual = 851.00
+    st.sidebar.warning("⚠️ Modo Manual Activo")
+
+tasa_bcv = st.sidebar.number_input("Tasa BCV (Bs/$)", value=tasa_bcv_actual, step=1.00, format="%.2f", disabled=modo_automatico)
+tasa_binance = st.sidebar.number_input("Tasa Venta Binance (Bs/$)", value=tasa_binance_actual, step=1.00, format="%.2f", disabled=modo_automatico)
+
 
 # --- Cálculos Matemáticos ---
-total_comisiones = com_banco + com_tarjeta + com_bpay
-bs_compra = tasa_bcv * (1 + total_comisiones)
+bs_compra = tasa_bcv * (1 + TOTAL_COMISIONES)
 profit_por_dolar = tasa_binance - bs_compra
 
 costo_total_bs = inversion * bs_compra
@@ -83,18 +99,18 @@ ingreso_total_bs = inversion * tasa_binance
 profit_total_bs = ingreso_total_bs - costo_total_bs
 profit_total_usd = profit_total_bs / tasa_bcv if tasa_bcv > 0 else 0
 
-# --- Dashboard (Diseño Responsivo) ---
+# --- Dashboard Principal ---
 st.subheader("Desglose Operativo")
 col1, col2 = st.columns(2)
 col1.metric("Costo por $ (Bs. Compra)", f"Bs. {bs_compra:,.2f}")
-col2.metric("Total Comisiones", f"{total_comisiones * 100:.2f}%")
+col2.metric("Comisiones Aplicadas", f"{TOTAL_COMISIONES * 100:.2f}%")
 
 st.divider()
 
 st.subheader("Resultados del Ciclo")
 col3, col4 = st.columns(2)
-col3.metric("Capital Inicial (Bs)", f"Bs. {costo_total_bs:,.2f}")
-col4.metric("Ingreso P2P (Bs)", f"Bs. {ingreso_total_bs:,.2f}")
+col3.metric("Capital a Descontar (BNC)", f"Bs. {costo_total_bs:,.2f}")
+col4.metric("Ingreso Venta (Binance)", f"Bs. {ingreso_total_bs:,.2f}")
 
 # Contenedor visual para la ganancia/pérdida
 st.write("")
@@ -103,16 +119,12 @@ if profit_total_bs > 0:
     ### 🎉 Operación Rentable
     **Ganancia Neta:** Bs. {profit_total_bs:,.2f}  
     **Equivalente USD:** $ {profit_total_usd:,.2f} (a tasa BCV)  
-    **Profit por cada Dólar:** Bs. {profit_por_dolar:,.2f}
+    **Profit por Dólar Inyectado:** Bs. {profit_por_dolar:,.2f}
     """)
 else:
     st.error(f"""
     ### ⚠️ Operación a Pérdida
     **Pérdida Neta:** Bs. {profit_total_bs:,.2f}  
     **Equivalente USD:** $ {profit_total_usd:,.2f} (a tasa BCV)  
-    No se recomienda inyectar con estas tasas.
+    No se recomienda inyectar con estas tasas en este monto.
     """)
-if profit_total_bs > 0:
-    st.success(f"### 🎉 Ganancia Neta: Bs. {profit_total_bs:,.2f}  |  $ {profit_total_usd:,.2f} (a tasa BCV)")
-else:
-    st.error(f"### ⚠️ Pérdida Neta: Bs. {profit_total_bs:,.2f}  |  $ {profit_total_usd:,.2f} (a tasa BCV). ¡No es rentable operar con estas tasas!")
